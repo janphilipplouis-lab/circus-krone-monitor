@@ -11,11 +11,15 @@ KRONE_URL = (
 )
 
 MUENCHEN_TICKET_URL = (
-    "https://tickets.muenchenticket.de/shops/218/events/437156"
+    "https://www.muenchenticket.de/event/"
+    "circus-krone-winterprogramm-2026-27-39357/"
 )
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 Circus-Krone-Monitor/1.0"
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 Chrome/140 Safari/537.36"
+    )
 }
 
 
@@ -25,6 +29,7 @@ def get_page(url):
         headers=HEADERS,
         timeout=30
     )
+
     response.raise_for_status()
 
     soup = BeautifulSoup(
@@ -46,109 +51,137 @@ def get_page(url):
 
     for link in soup.find_all("a", href=True):
         href = link.get("href", "")
+        label = link.get_text(
+            " ",
+            strip=True
+        )
 
         if href:
             links.append({
-                "text": link.get_text(
-                    " ",
-                    strip=True
-                ),
+                "text": label,
                 "url": href
             })
 
     return {
         "url": url,
-        "text": text[:40000],
+        "text": text[:50000],
         "links": links[:500]
     }
 
 
-def analyse(krone, ticket):
+def definitely_not_available(page):
+    text = page["text"].lower()
+
+    markers = [
+        "nicht verfügbar",
+        "noch nicht verfügbar",
+        "nicht buchbar",
+        "noch nicht buchbar",
+        "vorverkauf noch nicht gestartet",
+        "vorverkauf startet",
+        "vorverkaufsstart folgt",
+    ]
+
+    found = [
+        marker
+        for marker in markers
+        if marker in text
+    ]
+
+    if found:
+        print(
+            "München Ticket enthält "
+            "Nicht-Verfügbar-Hinweis:"
+        )
+
+        for marker in found:
+            print(f"  - {marker}")
+
+        return True
+
+    return False
+
+
+def has_real_ticket_action(page):
+    """
+    Konservative technische Prüfung.
+
+    Wir suchen nach Hinweisen, dass tatsächlich
+    eine Buchungsaktion angeboten wird.
+    """
+
+    text = page["text"].lower()
+
+    positive_markers = [
+        "ticket kaufen",
+        "tickets kaufen",
+        "jetzt buchen",
+        "tickets buchen",
+        "platz auswählen",
+        "plätze auswählen",
+        "kaufen",
+        "buchen",
+    ]
+
+    negative_markers = [
+        "nicht verfügbar",
+        "noch nicht verfügbar",
+        "nicht buchbar",
+    ]
+
+    if any(
+        marker in text
+        for marker in negative_markers
+    ):
+        return False
+
+    return any(
+        marker in text
+        for marker in positive_markers
+    )
+
+
+def analyse_with_ai(krone, ticket):
     client = OpenAI(
         api_key=os.environ["OPENAI_API_KEY"]
     )
 
     prompt = f"""
-Du bist ein sehr genauer Ticket-Monitor.
+Du bist eine zweite, sehr konservative Kontrolle
+für einen Ticket-Monitor.
 
-Prüfe ZWEI Webseiten und entscheide,
-ob der Vorverkauf für die
+Gesucht wird ausschließlich:
 
+CIRCUS KRONE-BAU MÜNCHEN
 WINTERSPIELZEIT 2026/27
-IM CIRCUS KRONE-BAU MÜNCHEN
+Premiere 25.12.2026
 
-bereits gestartet ist.
+Eine Veranstaltungsliste allein bedeutet NICHT,
+dass der Vorverkauf gestartet ist.
 
-ZIELVERANSTALTUNG:
+Wenn München Ticket "Nicht verfügbar",
+"nicht buchbar" oder eine sinngemäße Aussage
+zeigt, MUSS started=false sein.
 
-Circus Krone-Bau
-Marsstraße 43
-80335 München
+started=true nur dann, wenn konkrete Tickets
+tatsächlich gekauft/gebucht werden können.
 
-Premiere:
-25. Dezember 2026
+Wenn Zweifel bestehen: false.
 
---------------------------------------------------
-SEHR WICHTIG
---------------------------------------------------
-
-NICHT relevant sind:
-
-- Rosenheim
-- Ingolstadt
-- Weßling
-- andere Städte
-- Weihnachtscircusse im Zelt
-- andere Circus-Krone-Veranstaltungen
-- ältere Winterspielzeiten
-- allgemeine Circus-Krone-Tickets
-
-Eine Veranstaltung darf nur als Treffer gelten,
-wenn sie eindeutig zum CIRCUS KRONE-BAU IN MÜNCHEN
-gehört und die Winterspielzeit 2026/27 betrifft.
-
-started=true darf nur zurückgegeben werden, wenn:
-
-1. konkrete Tickets für München 2026/27 buchbar sind
-
-ODER
-
-2. Circus Krone ausdrücklich mitteilt,
-   dass der Vorverkauf für die Münchner
-   Winterspielzeit 2026/27 begonnen hat.
-
-Eine bloße Ankündigung wie
-"Informationen zum Vorverkaufsstart folgen im Herbst"
-bedeutet eindeutig:
-
-started=false
-
-Wenn du auch nur geringfügig unsicher bist:
-
-started=false
-
---------------------------------------------------
-ERWARTETES ERGEBNIS
---------------------------------------------------
-
-Antworte ausschließlich mit gültigem JSON:
+Antworte ausschließlich als JSON:
 
 {{
   "started": true oder false,
-  "confidence": Zahl zwischen 0 und 1,
+  "confidence": 0.0 bis 1.0,
   "reason": "kurze Begründung",
-  "ticket_url": "direkter Ticketlink oder leer"
+  "ticket_url": "URL oder leer"
 }}
 
---------------------------------------------------
-KRONE
---------------------------------------------------
+CIRCUS-KRONE-SEITE:
 
 {json.dumps(krone, ensure_ascii=False)}
 
---------------------------------------------------
-MÜNCHEN TICKET
---------------------------------------------------
+MÜNCHEN-TICKET-SEITE:
 
 {json.dumps(ticket, ensure_ascii=False)}
 """
@@ -171,30 +204,19 @@ def send_email(result):
 
     ticket_url = result.get(
         "ticket_url",
-        ""
+        MUENCHEN_TICKET_URL
     )
-
-    if ticket_url:
-        ticket_link = f"""
-        <p>
-          <a href="{ticket_url}">
-            🎟️ DIREKT ZU DEN TICKETS
-          </a>
-        </p>
-        """
-    else:
-        ticket_link = ""
 
     html = f"""
     <html>
       <body>
-        <h2>🎪 Circus Krone – VORVERKAUF GESTARTET!</h2>
+        <h2>🎪 Circus Krone – Vorverkauf gestartet!</h2>
 
         <p>
           Der Vorverkauf für die
           <strong>Winterspielzeit 2026/27</strong>
           im Circus Krone-Bau München
-          scheint gestartet zu sein.
+          scheint tatsächlich buchbar zu sein.
         </p>
 
         <p>
@@ -203,22 +225,20 @@ def send_email(result):
         </p>
 
         <p>
-          <strong>KI-Einschätzung:</strong><br>
+          <strong>Direkt zu den Tickets:</strong><br>
+          <a href="{ticket_url}">
+            Tickets öffnen
+          </a>
+        </p>
+
+        <p>
+          <strong>Kontrolle:</strong><br>
           {result["reason"]}
         </p>
 
         <p>
-          <strong>Konfidenz:</strong>
+          KI-Konfidenz:
           {result["confidence"]:.0%}
-        </p>
-
-        {ticket_link}
-
-        <hr>
-
-        <p>
-          Dies ist eine automatische Benachrichtigung
-          des Circus-Krone-Monitors.
         </p>
       </body>
     </html>
@@ -227,13 +247,17 @@ def send_email(result):
     params = {
         "from": "onboarding@resend.dev",
         "to": [os.environ["ALERT_EMAIL"]],
-        "subject": "🎪 Circus Krone: Vorverkauf gestartet!",
+        "subject": (
+            "🎪 Circus Krone: Vorverkauf gestartet!"
+        ),
         "html": html
     }
 
     email = resend.Emails.send(params)
 
-    print("Alarm-E-Mail versendet:")
+    print(
+        "Alarm-E-Mail versendet:"
+    )
     print(email)
 
 
@@ -245,15 +269,59 @@ def main():
     print()
     print("Prüfe Circus Krone...")
 
-    krone = get_page(KRONE_URL)
+    krone = get_page(
+        KRONE_URL
+    )
 
     print("Prüfe München Ticket...")
 
-    ticket = get_page(MUENCHEN_TICKET_URL)
+    ticket = get_page(
+        MUENCHEN_TICKET_URL
+    )
 
-    print("Analysiere beide Quellen...")
+    # ------------------------------------------------
+    # 1. HARTE NEGATIVPRÜFUNG
+    # ------------------------------------------------
 
-    result = analyse(
+    unavailable = definitely_not_available(
+        ticket
+    )
+
+    if unavailable:
+        print()
+        print(
+            "❌ Tickets sind laut München Ticket "
+            "nicht verfügbar."
+        )
+        print(
+            "Keine KI-Alarmprüfung erforderlich."
+        )
+        print()
+        print("Prüfung abgeschlossen.")
+        return
+
+    # ------------------------------------------------
+    # 2. TECHNISCHE POSITIVPRÜFUNG
+    # ------------------------------------------------
+
+    ticket_action = has_real_ticket_action(
+        ticket
+    )
+
+    print()
+    print(
+        "Technische Buchungsprüfung:",
+        ticket_action
+    )
+
+    # ------------------------------------------------
+    # 3. KI-ZWEITMEINUNG
+    # ------------------------------------------------
+
+    print()
+    print("Analysiere beide Quellen mit KI...")
+
+    result = analyse_with_ai(
         krone,
         ticket
     )
@@ -268,13 +336,23 @@ def main():
         )
     )
 
+    # ------------------------------------------------
+    # 4. ALARM NUR BEI DOPPELTER BESTÄTIGUNG
+    # ------------------------------------------------
+
+    confirmed = (
+        ticket_action
+        and result.get("started") is True
+        and result.get("confidence", 0) >= 0.90
+    )
+
     print()
 
-    if (
-        result["started"]
-        and result["confidence"] >= 0.90
-    ):
-        print("🚨 VORVERKAUF GESTARTET!")
+    if confirmed:
+        print(
+            "🚨 VORVERKAUF TECHNISCH + "
+            "MIT KI BESTÄTIGT!"
+        )
 
         send_email(result)
 
@@ -284,7 +362,8 @@ def main():
 
     else:
         print(
-            "Noch kein sicherer Vorverkaufsstart."
+            "❌ Kein ausreichend bestätigter "
+            "Vorverkaufsstart."
         )
         print(
             "Keine E-Mail wird versendet."
