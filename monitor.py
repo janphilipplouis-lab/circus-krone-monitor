@@ -213,16 +213,20 @@ def main():
         ensure_ascii=False,
         indent=2
     ))
+print()
 
-    # Für den Test absichtlich:
-    # E-Mail wird IMMER versendet.
-    print()
-    print("TEST: E-Mail wird verschickt...")
+if result["started"]:
+    print("🚨 VORVERKAUF GESTARTET!")
 
     send_email(result)
 
-    print()
-    print("TEST ABGESCHLOSSEN.")
+    print("Alarm-E-Mail wurde versendet.")
+else:
+    print("Noch kein Vorverkaufsstart. Keine E-Mail.")
+
+print()
+print("Prüfung abgeschlossen.")
+
 
 
 if __name__ == "__main__":
