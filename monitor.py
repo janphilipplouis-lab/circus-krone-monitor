@@ -5,7 +5,14 @@ from bs4 import BeautifulSoup
 from openai import OpenAI
 import resend
 
-KRONE_URL = "https://www.circus-krone.com/winterspielzeit-muenchen/"
+
+KRONE_URL = (
+    "https://www.circus-krone.com/winterspielzeit-muenchen/"
+)
+
+MUENCHEN_TICKET_URL = (
+    "https://tickets.muenchenticket.de/shops/218/events/437156"
+)
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 Circus-Krone-Monitor/1.0"
@@ -50,12 +57,13 @@ def get_page(url):
             })
 
     return {
-        "text": text[:30000],
-        "links": links[:300]
+        "url": url,
+        "text": text[:40000],
+        "links": links[:500]
     }
 
 
-def analyse(page):
+def analyse(krone, ticket):
     client = OpenAI(
         api_key=os.environ["OPENAI_API_KEY"]
     )
@@ -63,47 +71,65 @@ def analyse(page):
     prompt = f"""
 Du bist ein sehr genauer Ticket-Monitor.
 
-Prüfe die folgende Webseite:
+Prüfe ZWEI Webseiten und entscheide,
+ob der Vorverkauf für die
 
-{KRONE_URL}
-
-Die einzige relevante Frage lautet:
-
-Hat der Vorverkauf für die
 WINTERSPIELZEIT 2026/27
-im CIRCUS KRONE-BAU IN MÜNCHEN
-bereits begonnen?
+IM CIRCUS KRONE-BAU MÜNCHEN
 
-Es geht ausschließlich um:
+bereits gestartet ist.
+
+ZIELVERANSTALTUNG:
 
 Circus Krone-Bau
 Marsstraße 43
 80335 München
 
-Winterspielzeit 2026/27
-Premiere: 25. Dezember 2026
+Premiere:
+25. Dezember 2026
+
+--------------------------------------------------
+SEHR WICHTIG
+--------------------------------------------------
 
 NICHT relevant sind:
 
 - Rosenheim
 - Ingolstadt
+- Weßling
 - andere Städte
-- andere Weihnachtscircusse
-- Veranstaltungen im Circus-Krone-Zelt
+- Weihnachtscircusse im Zelt
+- andere Circus-Krone-Veranstaltungen
 - ältere Winterspielzeiten
-- allgemeine Tickets
-- Programmankündigungen ohne buchbare Tickets
+- allgemeine Circus-Krone-Tickets
 
-started darf nur true sein, wenn konkrete Tickets
-für Vorstellungen im Circus Krone-Bau München
-2026/27 tatsächlich erhältlich bzw. buchbar sind
-oder ausdrücklich mitgeteilt wird, dass der Vorverkauf
-für diese Veranstaltung begonnen hat.
+Eine Veranstaltung darf nur als Treffer gelten,
+wenn sie eindeutig zum CIRCUS KRONE-BAU IN MÜNCHEN
+gehört und die Winterspielzeit 2026/27 betrifft.
 
-Wenn nur angekündigt wird, dass Informationen zum
-Vorverkaufsstart später folgen, muss started=false sein.
+started=true darf nur zurückgegeben werden, wenn:
 
-Wenn du nicht sicher bist, muss started=false sein.
+1. konkrete Tickets für München 2026/27 buchbar sind
+
+ODER
+
+2. Circus Krone ausdrücklich mitteilt,
+   dass der Vorverkauf für die Münchner
+   Winterspielzeit 2026/27 begonnen hat.
+
+Eine bloße Ankündigung wie
+"Informationen zum Vorverkaufsstart folgen im Herbst"
+bedeutet eindeutig:
+
+started=false
+
+Wenn du auch nur geringfügig unsicher bist:
+
+started=false
+
+--------------------------------------------------
+ERWARTETES ERGEBNIS
+--------------------------------------------------
 
 Antworte ausschließlich mit gültigem JSON:
 
@@ -114,9 +140,17 @@ Antworte ausschließlich mit gültigem JSON:
   "ticket_url": "direkter Ticketlink oder leer"
 }}
 
-WEBSEITENINHALT:
+--------------------------------------------------
+KRONE
+--------------------------------------------------
 
-{json.dumps(page, ensure_ascii=False)}
+{json.dumps(krone, ensure_ascii=False)}
+
+--------------------------------------------------
+MÜNCHEN TICKET
+--------------------------------------------------
+
+{json.dumps(ticket, ensure_ascii=False)}
 """
 
     response = client.responses.create(
@@ -127,7 +161,9 @@ WEBSEITENINHALT:
         input=prompt
     )
 
-    return json.loads(response.output_text)
+    return json.loads(
+        response.output_text
+    )
 
 
 def send_email(result):
@@ -142,7 +178,7 @@ def send_email(result):
         ticket_link = f"""
         <p>
           <a href="{ticket_url}">
-            🎟️ Direkt zu den Tickets
+            🎟️ DIREKT ZU DEN TICKETS
           </a>
         </p>
         """
@@ -152,16 +188,18 @@ def send_email(result):
     html = f"""
     <html>
       <body>
-        <h2>🎪 Circus Krone – Vorverkauf gestartet!</h2>
+        <h2>🎪 Circus Krone – VORVERKAUF GESTARTET!</h2>
 
         <p>
           Der Vorverkauf für die
           <strong>Winterspielzeit 2026/27</strong>
-          im Circus Krone-Bau München scheint gestartet zu sein.
+          im Circus Krone-Bau München
+          scheint gestartet zu sein.
         </p>
 
         <p>
-          <strong>Premiere:</strong> 25. Dezember 2026
+          <strong>Premiere:</strong>
+          25. Dezember 2026
         </p>
 
         <p>
@@ -176,16 +214,18 @@ def send_email(result):
 
         {ticket_link}
 
+        <hr>
+
         <p>
-          Bitte die Verfügbarkeit sicherheitshalber
-          direkt beim Anbieter überprüfen.
+          Dies ist eine automatische Benachrichtigung
+          des Circus-Krone-Monitors.
         </p>
       </body>
     </html>
     """
 
     params = {
-        "from": "Circus Krone Monitor <onboarding@resend.dev>",
+        "from": "onboarding@resend.dev",
         "to": [os.environ["ALERT_EMAIL"]],
         "subject": "🎪 Circus Krone: Vorverkauf gestartet!",
         "html": html
@@ -193,7 +233,7 @@ def send_email(result):
 
     email = resend.Emails.send(params)
 
-    print("E-Mail erfolgreich versendet:")
+    print("Alarm-E-Mail versendet:")
     print(email)
 
 
@@ -202,31 +242,56 @@ def main():
     print("Circus Krone Ticket Monitor")
     print("================================")
 
-    page = get_page(KRONE_URL)
+    print()
+    print("Prüfe Circus Krone...")
 
-    result = analyse(page)
+    krone = get_page(KRONE_URL)
+
+    print("Prüfe München Ticket...")
+
+    ticket = get_page(MUENCHEN_TICKET_URL)
+
+    print("Analysiere beide Quellen...")
+
+    result = analyse(
+        krone,
+        ticket
+    )
 
     print()
     print("ERGEBNIS DER KI:")
-    print(json.dumps(
-        result,
-        ensure_ascii=False,
-        indent=2
-    ))
-print()
+    print(
+        json.dumps(
+            result,
+            ensure_ascii=False,
+            indent=2
+        )
+    )
 
-if result["started"]:
-    print("🚨 VORVERKAUF GESTARTET!")
+    print()
 
-    send_email(result)
+    if (
+        result["started"]
+        and result["confidence"] >= 0.90
+    ):
+        print("🚨 VORVERKAUF GESTARTET!")
 
-    print("Alarm-E-Mail wurde versendet.")
-else:
-    print("Noch kein Vorverkaufsstart. Keine E-Mail.")
+        send_email(result)
 
-print()
-print("Prüfung abgeschlossen.")
+        print(
+            "Alarm-E-Mail wurde versendet."
+        )
 
+    else:
+        print(
+            "Noch kein sicherer Vorverkaufsstart."
+        )
+        print(
+            "Keine E-Mail wird versendet."
+        )
+
+    print()
+    print("Prüfung abgeschlossen.")
 
 
 if __name__ == "__main__":
