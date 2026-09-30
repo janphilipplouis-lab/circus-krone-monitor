@@ -127,6 +127,28 @@ Wenn du auch nur geringfügig unsicher bist:
 
 started=false
 
+SEHR WICHTIG:
+
+Die bloße Existenz einer München-Ticket-Veranstaltungsseite
+bedeutet NICHT, dass der Vorverkauf gestartet ist.
+
+Wenn die München-Ticket-Seite ausdrücklich
+"Nicht verfügbar", "noch nicht verfügbar",
+"Vorverkauf noch nicht gestartet" oder eine sinngemäße
+Formulierung enthält, MUSS started=false sein.
+
+Auch eine Liste konkreter Veranstaltungstermine bedeutet
+nicht automatisch, dass Tickets buchbar sind.
+
+started=true darf nur gelten, wenn tatsächlich eine
+Buchungsmöglichkeit für mindestens eine Vorstellung
+vorhanden ist, z.B. ein Kaufen-/Buchen-Button oder eine
+eindeutige Aussage, dass Tickets erhältlich sind.
+
+Bei Widerspruch zwischen Veranstaltungslistung und
+Verfügbarkeit gilt:
+NICHT VERFÜGBAR = started=false.
+
 --------------------------------------------------
 ERWARTETES ERGEBNIS
 --------------------------------------------------
@@ -256,6 +278,31 @@ def main():
     result = analyse(
         krone,
         ticket
+    )
+ticket_text_lower = ticket["text"].lower()
+
+not_available_markers = [
+    "nicht verfügbar",
+    "noch nicht verfügbar",
+    "vorverkauf noch nicht gestartet",
+    "noch nicht buchbar",
+    "nicht buchbar"
+]
+
+if any(
+    marker in ticket_text_lower
+    for marker in not_available_markers
+):
+    print(
+        "München Ticket meldet keine Verfügbarkeit."
+    )
+
+    result["started"] = False
+    result["ticket_url"] = ""
+    result["reason"] = (
+        "Die München-Ticket-Seite führt die "
+        "Winterspielzeit 2026/27 bereits, "
+        "kennzeichnet sie aber als nicht verfügbar."
     )
 
     print()
